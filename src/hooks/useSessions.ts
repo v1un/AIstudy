@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Session, Message, SessionsState } from '../types/session';
+import { Session, Message, SessionsState, CurriculumStep, StudyPhase } from '../types/session';
+import { studyAgent } from '../lib/studyAgent';
 
 const STORAGE_KEY = 'ai-study-sessions';
 
@@ -54,13 +55,14 @@ export const useSessions = () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sessionsState));
   }, [sessionsState]);
 
-  const createNewSession = (): string => {
+  const createNewSession = (isStudySession?: boolean): string => {
     const newSession: Session = {
       id: Date.now().toString(),
-      title: 'New Study Session',
+      title: isStudySession ? 'New Study Session' : 'New Chat Session',
       messages: [getInitialMessage()],
       createdAt: new Date(),
       updatedAt: new Date(),
+      isStudySession,
     };
 
     setSessionsState(prev => ({
@@ -69,6 +71,71 @@ export const useSessions = () => {
     }));
 
     return newSession.id;
+  };
+
+  const createStudySession = (topic: string): string => {
+    const curriculum = studyAgent.generateCurriculum(topic);
+    const studyPhase: StudyPhase = {
+      phase: 'planning',
+      currentStepId: curriculum[0]?.id,
+      awaitingResponse: false,
+    };
+
+    const newSession: Session = {
+      id: Date.now().toString(),
+      title: `Study: ${topic}`,
+      messages: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isStudySession: true,
+      topic,
+      curriculum,
+      studyPhase,
+      progress: {
+        completedSteps: 0,
+        totalSteps: curriculum.length,
+        currentStepIndex: 0,
+      },
+    };
+
+    setSessionsState(prev => ({
+      sessions: [newSession, ...prev.sessions],
+      currentSessionId: newSession.id,
+    }));
+
+    return newSession.id;
+  };
+
+  const updateStudyPhase = (sessionId: string, phase: StudyPhase) => {
+    setSessionsState(prev => ({
+      ...prev,
+      sessions: prev.sessions.map(session =>
+        session.id === sessionId
+          ? { ...session, studyPhase: phase, updatedAt: new Date() }
+          : session
+      ),
+    }));
+  };
+
+  const updateProgress = (sessionId: string, stepIndex: number) => {
+    setSessionsState(prev => ({
+      ...prev,
+      sessions: prev.sessions.map(session => {
+        if (session.id === sessionId && session.curriculum) {
+          const completedSteps = session.curriculum.filter(step => step.completed).length;
+          return {
+            ...session,
+            progress: {
+              completedSteps,
+              totalSteps: session.curriculum.length,
+              currentStepIndex: stepIndex,
+            },
+            updatedAt: new Date(),
+          };
+        }
+        return session;
+      }),
+    }));
   };
 
   const switchToSession = (sessionId: string) => {
@@ -125,9 +192,12 @@ export const useSessions = () => {
     currentSessionId: sessionsState.currentSessionId,
     currentSession: getCurrentSession(),
     createNewSession,
+    createStudySession,
     switchToSession,
     deleteSession,
     updateSessionMessages,
+    updateStudyPhase,
+    updateProgress,
     clearAllSessions,
     hasAnySessions: sessionsState.sessions.length > 0,
   };

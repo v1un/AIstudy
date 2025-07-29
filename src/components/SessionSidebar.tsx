@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MessageSquare, Plus, Trash2, MoreVertical, X } from 'lucide-react';
+import { MessageSquare, Plus, Trash2, MoreVertical, X, BookOpen, CheckCircle } from 'lucide-react';
 import { Session } from '../types/session';
 import { toast } from 'sonner';
 
@@ -123,6 +123,16 @@ export default function SessionSidebar({
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1 min-w-0">
+                          <div className="flex items-center space-x-2 mb-1">
+                            {session.isStudySession ? (
+                              <BookOpen className={`h-4 w-4 ${isActive ? 'text-blue-600' : 'text-gray-500'}`} />
+                            ) : (
+                              <MessageSquare className={`h-4 w-4 ${isActive ? 'text-blue-600' : 'text-gray-500'}`} />
+                            )}
+                            {session.isStudySession && session.progress && session.progress.completedSteps === session.progress.totalSteps && (
+                              <CheckCircle className="h-4 w-4 text-green-500" />
+                            )}
+                          </div>
                           <h3 className={`
                             text-sm font-medium truncate
                             ${isActive ? 'text-blue-900' : 'text-gray-900'}
@@ -135,6 +145,28 @@ export default function SessionSidebar({
                           `}>
                             {formatDate(session.updatedAt)} • {session.messages.length} messages
                           </p>
+                          {session.isStudySession && session.progress && (
+                            <div className="mt-2">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className={isActive ? 'text-blue-600' : 'text-gray-500'}>
+                                  Progress: {session.progress.completedSteps}/{session.progress.totalSteps}
+                                </span>
+                                <span className={isActive ? 'text-blue-600' : 'text-gray-500'}>
+                                  {Math.round((session.progress.completedSteps / session.progress.totalSteps) * 100)}%
+                                </span>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+                                <div
+                                  className={`h-1.5 rounded-full transition-all ${
+                                    isActive ? 'bg-blue-500' : 'bg-gray-400'
+                                  }`}
+                                  style={{
+                                    width: `${(session.progress.completedSteps / session.progress.totalSteps) * 100}%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          )}
                         </div>
                         
                         {sessions.length > 1 && (
