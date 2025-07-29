@@ -3,9 +3,12 @@ import { Send, ArrowLeft, Menu, BookOpen, Calculator, Globe, Languages } from 'l
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useSessions } from '../hooks/useSessions';
+import { useStudyAgent } from '../hooks/useStudyAgent';
 import { Message } from '../types/session';
 import SessionSidebar from '../components/SessionSidebar';
 import EmptyState from '../components/Empty';
+import StudyProgress from '../components/StudyProgress';
+import StudyModeSelector from '../components/StudyModeSelector';
 
 const topicSuggestions = [
   { icon: Calculator, label: 'Math', color: 'bg-blue-100 text-blue-700' },
@@ -20,11 +23,16 @@ export default function Chat() {
     currentSessionId,
     currentSession,
     createNewSession,
+    createStudySession,
     switchToSession,
     deleteSession,
     updateSessionMessages,
+    updateStudyPhase,
+    updateProgress,
     hasAnySessions,
   } = useSessions();
+  
+  const studyAgent = useStudyAgent();
   
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -43,7 +51,7 @@ export default function Chat() {
   }, [messages]);
 
   const handleSendMessage = async (content: string) => {
-    if (!content.trim() || !currentSessionId) return;
+    if (!content.trim() || !currentSessionId || !currentSession) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -57,18 +65,69 @@ export default function Chat() {
     setInputValue('');
     setIsTyping(true);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const aiResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        content: `I understand you're asking about "${content.trim()}". Let me help you with that! This is a simulated AI response. In a real implementation, this would connect to an actual AI service to provide detailed explanations and study assistance.`,
-        isUser: false,
-        timestamp: new Date(),
-      };
-      const finalMessages = [...updatedMessages, aiResponse];
-      updateSessionMessages(currentSessionId, finalMessages);
+    try {
+      if (studyAgent.isStudySession(currentSession)) {
+        // Handle study session response
+        const aiMessages = await studyAgent.processUserResponse(content.trim(), currentSession);
+        const finalMessages = [...updatedMessages, ...aiMessages];
+        updateSessionMessages(currentSessionId, finalMessages);
+        
+        // Update study phase and progress
+        if (aiMessages.length > 0) {
+          const newPhase = determineNewPhase(content.trim(), currentSession);
+          if (newPhase) {
+            updateStudyPhase(currentSessionId, newPhase);
+          }
+          
+          // Update progress if moving to next step
+          if (content.toLowerCase().includes('continue') || content.toLowerCase().includes('next')) {
+            const currentStepIndex = currentSession.progress?.currentStepIndex ?? 0;
+            updateProgress(currentSessionId, Math.min(currentStepIndex + 1, (currentSession.curriculum?.length ?? 1) - 1));
+          }
+        }
+      } else {
+        // Handle regular chat response
+        setTimeout(() => {
+          const aiResponse: Message = {
+            id: (Date.now() + 1).toString(),
+            content: `I understand you're asking about "${content.trim()}". Let me help you with that! This is a simulated AI response. In a real implementation, this would connect to an actual AI service to provide detailed explanations and study assistance.
+
+Would you like me to create a structured study session for this topic instead? I can break it down into manageable steps and guide you through it systematically.`,
+            isUser: false,
+            timestamp: new Date(),
+          };
+          const finalMessages = [...updatedMessages, aiResponse];
+          updateSessionMessages(currentSessionId, finalMessages);
+          setIsTyping(false);
+        }, 1500);
+      }
+    } catch (error) {
+      console.error('Error processing message:', error);
+      toast.error('Something went wrong. Please try again.');
+    } finally {
       setIsTyping(false);
-    }, 1500);
+    }
+  };
+
+  const determineNewPhase = (response: string, session: any) => {
+    if (!session.studyPhase) return null;
+    
+    const { phase } = session.studyPhase;
+    const lowerResponse = response.toLowerCase();
+    
+    if (phase === 'planning' && (lowerResponse.includes('ready') || lowerResponse.includes('start'))) {
+      return { ...session.studyPhase, phase: 'teaching' as const };
+    } else if (phase === 'teaching' && lowerResponse.includes('continue')) {
+      // Check if we should do understanding check
+      const currentStepIndex = session.progress?.currentStepIndex ?? 0;
+      if ((currentStepIndex + 1) % 3 === 0) {
+        return { ...session.studyPhase, phase: 'questioning' as const };
+      }
+    } else if (phase === 'questioning') {
+      return { ...session.studyPhase, phase: 'teaching' as const };
+    }
+    
+    return null;
   };
 
   const handleTopicClick = (topic: string) => {
@@ -82,6 +141,25 @@ export default function Chat() {
   
   const handleCreateFirstSession = () => {
     createNewSession();
+  };
+
+  const handleModeSelect = async (mode: 'chat' | 'study', topic?: string) => {
+    if (mode === 'chat') {
+      const sessionId = createNewSession(false);
+      setSidebarOpen(false);
+    } else if (mode === 'study' && topic) {
+      const sessionId = createStudySession(topic);
+      setSidebarOpen(false);
+      
+      // Initialize study session with curriculum
+      try {
+        const initialMessages = await studyAgent.initializeStudySession(topic, sessionId);
+        updateSessionMessages(sessionId, initialMessages);
+      } catch (error) {
+        console.error('Error initializing study session:', error);
+        toast.error('Failed to initialize study session');
+      }
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -117,7 +195,7 @@ export default function Chat() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Show empty state if no sessions exist
+  // Show mode selector if no sessions exist
   if (!hasAnySessions) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -132,12 +210,14 @@ export default function Chat() {
               </Link>
               <div className="flex items-center space-x-2">
                 <BookOpen className="h-6 w-6 text-blue-600" />
-                <h1 className="text-xl font-semibold text-gray-900">AI Study Chat</h1>
+                <h1 className="text-xl font-semibold text-gray-900">AI Study</h1>
               </div>
             </div>
           </div>
         </header>
-        <EmptyState onCreateSession={handleCreateFirstSession} />
+        <div className="flex-1 flex items-center justify-center p-4">
+          <StudyModeSelector onModeSelect={handleModeSelect} />
+        </div>
       </div>
     );
   }
@@ -156,9 +236,11 @@ export default function Chat() {
       />
       
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <header className="bg-white border-b border-gray-200 px-4 py-3">
+      <div className="flex-1 flex min-w-0">
+        {/* Chat Column */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Header */}
+          <header className="bg-white border-b border-gray-200 px-4 py-3">
           <div className="max-w-4xl mx-auto flex items-center justify-between">
             <div className="flex items-center space-x-4">
               <button
@@ -217,10 +299,36 @@ export default function Chat() {
                   className={`max-w-xs sm:max-w-md lg:max-w-lg xl:max-w-xl px-4 py-3 rounded-2xl ${
                     message.isUser
                       ? 'bg-blue-600 text-white'
+                      : message.type === 'curriculum'
+                      ? 'bg-gradient-to-br from-blue-50 to-indigo-50 text-gray-900 border border-blue-200'
+                      : message.type === 'phase_transition'
+                      ? 'bg-gradient-to-br from-green-50 to-emerald-50 text-gray-900 border border-green-200'
+                      : message.type === 'understanding_check'
+                      ? 'bg-gradient-to-br from-purple-50 to-violet-50 text-gray-900 border border-purple-200'
                       : 'bg-white text-gray-900 border border-gray-200'
                   }`}
                 >
-                  <p className="text-sm leading-relaxed">{message.content}</p>
+                  <div className="text-sm leading-relaxed prose prose-sm max-w-none">
+                    {message.content.split('\n').map((line, index) => (
+                      <div key={index}>
+                        {line.startsWith('## ') ? (
+                          <h3 className="font-semibold text-base mb-2 text-gray-900">
+                            {line.replace('## ', '')}
+                          </h3>
+                        ) : line.startsWith('**') && line.endsWith('**') ? (
+                          <p className="font-medium mb-1">
+                            {line.replace(/\*\*/g, '')}
+                          </p>
+                        ) : line.trim() === '---' ? (
+                          <hr className="my-3 border-gray-300" />
+                        ) : line.trim() ? (
+                          <p className="mb-2">{line}</p>
+                        ) : (
+                          <br />
+                        )}
+                      </div>
+                    ))}
+                  </div>
                   <p
                     className={`text-xs mt-2 ${
                       message.isUser ? 'text-blue-100' : 'text-gray-500'
@@ -279,6 +387,14 @@ export default function Chat() {
             </p>
           </div>
         </div>
+        </div>
+        
+        {/* Study Progress Sidebar */}
+        {currentSession && studyAgent.isStudySession(currentSession) && (
+          <div className="w-80 bg-gray-50 border-l border-gray-200 p-4 overflow-y-auto">
+            <StudyProgress session={currentSession} />
+          </div>
+        )}
       </div>
     </div>
   );
